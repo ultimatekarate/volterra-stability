@@ -2,13 +2,15 @@
 //!
 //! Laboratory layer: pure math. Caller provides timestamps.
 
+use serde::{Deserialize, Serialize};
+
 /// A single Volterra second-kind integral with caller-provided timestamps.
 ///
 /// Each integral decays independently: I(t+dt) = impulse + I(t) * exp(-lambda * dt)
 /// where dt is measured from THIS integral's last update, not a shared clock.
 ///
 /// The caller owns the time source. Pass seconds since an arbitrary epoch.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecayingIntegral {
     value: f64,
     lambda: f64,
@@ -45,7 +47,7 @@ impl DecayingIntegral {
 }
 
 /// A bank of N decaying integrals, one per pressure channel.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegralBank {
     integrals: Vec<DecayingIntegral>,
 }

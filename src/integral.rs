@@ -141,4 +141,208 @@ mod tests {
         let v1 = bank.current_value(1, 1.0);
         assert!(v0 > v1, "Channel with lower lambda should retain more value");
     }
+
+    // ── Edge-case tests ─────────────────────────────────────────────
+
+    #[test]
+    fn negative_impulse() {
+        let mut i = DecayingIntegral::new(1.0, 0.0);
+        i.record(-3.0, 0.0);
+        assert!((i.current_value(0.0) - (-3.0)).abs() < 1e-12);
+        // Negative value still decays toward zero
+        let v = i.current_value(1.0);
+        assert!(v > -3.0, "negative value should decay toward zero");
+        assert!(v < 0.0, "negative value should stay negative without positive impulse");
+    }
+
+    #[test]
+    fn negative_impulse_mixed_with_positive() {
+        let mut i = DecayingIntegral::new(1.0, 0.0);
+        i.record(5.0, 0.0);
+        i.record(-3.0, 0.0);
+        // 5.0 * exp(0) + (-3.0) = 2.0
+        assert!((i.current_value(0.0) - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn very_large_dt_decays_to_near_zero() {
+        let mut i = DecayingIntegral::new(1.0, 0.0);
+        i.record(1e6, 0.0);
+        // After dt=1000 with lambda=1, exp(-1000) is essentially 0
+        let v = i.current_value(1000.0);
+        assert!(v.abs() < 1e-100, "large dt should fully decay the value");
+    }
+
+    #[test]
+    fn very_large_dt_in_record_decays_prior_value() {
+        let mut i = DecayingIntegral::new(1.0, 0.0);
+        i.record(100.0, 0.0);
+        i.record(1.0, 1000.0);
+        // Prior value fully decayed, only the new impulse remains
+        assert!((i.current_value(1000.0) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn very_small_dt_preserves_value() {
+        let mut i = DecayingIntegral::new(1.0, 0.0);
+        i.record(10.0, 0.0);
+        // dt = 1e-15: exp(-1e-15) ≈ 1
+        let v = i.current_value(1e-15);
+        assert!((v - 10.0).abs() < 1e-10, "tiny dt should barely decay");
+    }
+
+    #[test]
+    fn very_small_dt_between_records() {
+        let mut i = DecayingIntegral::new(1.0, 0.0);
+        i.record(5.0, 0.0);
+        i.record(3.0, 1e-15);
+        // 5.0 * exp(-1e-15) + 3.0 ≈ 8.0
+        assert!((i.current_value(1e-15) - 8.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn dt_zero_no_decay() {
+        let mut i = DecayingIntegral::new(1.0, 0.0);
+        i.record(7.0, 0.0);
+        // current_value at same timestamp: no decay
+        assert!((i.current_value(0.0) - 7.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn dt_zero_record_accumulates() {
+        let mut i = DecayingIntegral::new(1.0, 0.0);
+        i.record(3.0, 0.0);
+        i.record(4.0, 0.0);
+        // dt=0 means exp(0)=1, so value = 4.0 + 3.0 * 1.0 = 7.0
+        assert!((i.current_value(0.0) - 7.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn rapid_alternating_impulses() {
+        let mut i = DecayingIntegral::new(1.0, 0.0);
+        // Alternate +1 / -1 at tiny intervals
+        for k in 0..100 {
+            let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
+            i.record(sign, k as f64 * 0.001);
+        }
+        // The value should remain bounded and finite
+        let v = i.current_value(0.1);
+        assert!(v.is_finite(), "alternating impulses should produce finite value");
+        assert!(v.abs() < 100.0, "alternating impulses should not blow up");
+    }
+
+    #[test]
+    fn rapid_alternating_impulses_cancel() {
+        let mut i = DecayingIntegral::new(0.0, 0.0);
+        // With lambda=0 (no decay), equal +/- impulses cancel perfectly
+        i.record(1.0, 0.0);
+        i.record(-1.0, 0.0);
+        assert!((i.current_value(0.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn record_and_current_value_same_timestamp() {
+        let mut i = DecayingIntegral::new(1.0, 0.0);
+        i.record(5.0, 10.0);
+        // current_value at the same timestamp as the last record: no additional decay
+        assert!((i.current_value(10.0) - 5.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn current_value_before_record_timestamp() {
+        let mut i = DecayingIntegral::new(1.0, 10.0);
+        i.record(1.0, 10.0);
+        // Querying at t=9 (before last_update=10) gives exp(-lambda*(-1)) = exp(1)
+        // This is the current behavior: negative dt causes growth in current_value
+        let v = i.current_value(9.0);
+        assert!((v - (1.0_f64).exp()).abs() < 1e-12);
+    }
+}
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// For any sequence of non-negative impulses, the value at t2 cannot exceed
+        /// the value at t1 plus the sum of impulses recorded between t1 and t2.
+        #[test]
+        fn monotonic_decay_invariant(
+            lambda in 0.01_f64..10.0,
+            impulses in prop::collection::vec((0.0_f64..100.0, 0.0_f64..1.0), 1..50),
+        ) {
+            let mut integral = DecayingIntegral::new(lambda, 0.0);
+
+            // Build sorted timestamps from relative deltas
+            let mut timestamps: Vec<f64> = Vec::with_capacity(impulses.len());
+            let mut t = 0.0;
+            for &(_, dt) in &impulses {
+                t += dt;
+                timestamps.push(t);
+            }
+
+            // Record all impulses
+            for (idx, &(imp, _)) in impulses.iter().enumerate() {
+                integral.record(imp, timestamps[idx]);
+            }
+
+            // Check invariant between every pair of observation points after the
+            // last recorded impulse (so no new impulses intervene).
+            let t_final = *timestamps.last().unwrap();
+            let t1 = t_final;
+            let t2 = t_final + 1.0;
+
+            let v1 = integral.current_value(t1);
+            let v2 = integral.current_value(t2);
+
+            // No impulses between t1 and t2, so v2 <= v1 (pure decay)
+            prop_assert!(
+                v2 <= v1 + 1e-10,
+                "decay violated: v1={}, v2={}, lambda={}", v1, v2, lambda
+            );
+        }
+
+        /// The full invariant: value at t2 <= value at t1 + sum of impulses between t1 and t2.
+        #[test]
+        fn bounded_growth_invariant(
+            lambda in 0.01_f64..10.0,
+            impulses in prop::collection::vec((0.0_f64..100.0, 0.001_f64..1.0), 2..30),
+        ) {
+            let mut integral = DecayingIntegral::new(lambda, 0.0);
+
+            // Build monotonic timestamps
+            let mut timestamps: Vec<f64> = Vec::with_capacity(impulses.len());
+            let mut t = 0.0;
+            for &(_, dt) in &impulses {
+                t += dt;
+                timestamps.push(t);
+            }
+
+            // Pick a split point: measure at midpoint, record rest, measure again
+            let split = impulses.len() / 2;
+
+            // Record first half
+            for idx in 0..split {
+                integral.record(impulses[idx].0, timestamps[idx]);
+            }
+            let t1 = timestamps[split - 1];
+            let v1 = integral.current_value(t1);
+
+            // Record second half
+            let mut impulse_sum = 0.0;
+            for idx in split..impulses.len() {
+                integral.record(impulses[idx].0, timestamps[idx]);
+                impulse_sum += impulses[idx].0;
+            }
+            let t2 = *timestamps.last().unwrap();
+            let v2 = integral.current_value(t2);
+
+            prop_assert!(
+                v2 <= v1 + impulse_sum + 1e-10,
+                "bounded growth violated: v1={}, v2={}, impulse_sum={}, lambda={}",
+                v1, v2, impulse_sum, lambda
+            );
+        }
+    }
 }

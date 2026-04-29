@@ -1,3 +1,5 @@
+[![CI](https://github.com/ultimatekarate/volterra-stability/actions/workflows/ci.yml/badge.svg)](https://github.com/ultimatekarate/volterra-stability/actions/workflows/ci.yml)
+
 # volterra-stability
 
 Domain-agnostic Rust library for stability analysis of distributed systems modeled as coupled [Volterra integral equations](https://en.wikipedia.org/wiki/Volterra_integral_equation) of the second kind with exponential decay kernels.

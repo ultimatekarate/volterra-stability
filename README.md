@@ -134,4 +134,4 @@ J[i,j] = df_i/dI_j - lambda_i * delta_{ij}
 
 ## License
 
-See [LICENSE](LICENSE) for details.
+MIT.

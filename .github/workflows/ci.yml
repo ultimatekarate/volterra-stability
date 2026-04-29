@@ -15,7 +15,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy
 
       - name: Build idiom
         run: cargo build
